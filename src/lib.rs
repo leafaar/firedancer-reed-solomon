@@ -29,10 +29,7 @@ mod ffi {
         pub fn fd_reedsol_strerror(err: i32) -> *const std::ffi::c_char;
 
         // Encode functions
-        pub fn fd_reedsol_encode_init_wrapper(
-            mem: *mut c_void,
-            shred_sz: usize,
-        ) -> *mut FdReedsol;
+        pub fn fd_reedsol_encode_init_wrapper(mem: *mut c_void, shred_sz: usize) -> *mut FdReedsol;
         pub fn fd_reedsol_encode_add_data_shred_wrapper(
             rs: *mut FdReedsol,
             ptr: *const c_void,
@@ -45,10 +42,8 @@ mod ffi {
         pub fn fd_reedsol_encode_abort_wrapper(rs: *mut FdReedsol);
 
         // Recover functions
-        pub fn fd_reedsol_recover_init_wrapper(
-            mem: *mut c_void,
-            shred_sz: usize,
-        ) -> *mut FdReedsol;
+        pub fn fd_reedsol_recover_init_wrapper(mem: *mut c_void, shred_sz: usize)
+            -> *mut FdReedsol;
         pub fn fd_reedsol_recover_add_rcvd_shred_wrapper(
             rs: *mut FdReedsol,
             is_data_shred: i32,
@@ -114,11 +109,13 @@ pub struct ReedSolomon {
     layout: Layout,
 }
 
-// Safety: ReedSolomon can be sent between threads
+// Safety: the workspace pointer behind `mem` is owned by this value and only
+// freed in Drop, so moving the value to another thread is fine.
 unsafe impl Send for ReedSolomon {}
 
-// Safety: ReedSolomon does not have interior mutability that would cause issues
-unsafe impl Sync for ReedSolomon {}
+// Deliberately not Sync: every encode/reconstruct scribbles over the shared
+// fd_reedsol_t workspace behind `mem` even though it used to take &self, so
+// concurrent calls on one instance would race. Use one instance per thread.
 
 impl ReedSolomon {
     /// Creates a new Reed-Solomon encoder/decoder
@@ -161,7 +158,9 @@ impl ReedSolomon {
         let mem = unsafe {
             let ptr = alloc(layout);
             if ptr.is_null() {
-                return Err(Error::InvalidConfig("failed to allocate memory".to_string()));
+                return Err(Error::InvalidConfig(
+                    "failed to allocate memory".to_string(),
+                ));
             }
             NonNull::new_unchecked(ptr)
         };
@@ -197,7 +196,7 @@ impl ReedSolomon {
     ///
     /// # Safety
     /// All shards must have the same length (at least 32 bytes)
-    pub fn encode<T: AsRef<[u8]> + AsMut<[u8]>>(&self, shards: &mut [T]) -> Result<(), Error> {
+    pub fn encode<T: AsRef<[u8]> + AsMut<[u8]>>(&mut self, shards: &mut [T]) -> Result<(), Error> {
         if shards.len() != self.total_shard_count() {
             return Err(Error::InvalidConfig(format!(
                 "expected {} shards, got {}",
@@ -231,7 +230,9 @@ impl ReedSolomon {
                 shred_sz,
             );
             if rs.is_null() {
-                return Err(Error::InvalidConfig("failed to initialize encoder".to_string()));
+                return Err(Error::InvalidConfig(
+                    "failed to initialize encoder".to_string(),
+                ));
             }
 
             // Add data shreds
@@ -268,7 +269,7 @@ impl ReedSolomon {
     /// # Errors
     /// Returns an error if there aren't enough shards to reconstruct the data
     pub fn reconstruct<T: AsRef<[u8]> + AsMut<[u8]> + Default>(
-        &self,
+        &mut self,
         shards: &mut [Option<T>],
     ) -> Result<(), Error> {
         if shards.len() != self.total_shard_count() {
@@ -325,7 +326,9 @@ impl ReedSolomon {
                 shred_sz,
             );
             if rs.is_null() {
-                return Err(Error::InvalidConfig("failed to initialize recovery".to_string()));
+                return Err(Error::InvalidConfig(
+                    "failed to initialize recovery".to_string(),
+                ));
             }
 
             // Add all shards in order
@@ -383,7 +386,7 @@ impl ReedSolomon {
     /// * `shards` - Mutable slice of `(T, bool)` tuples where `T` implements `AsMut<[u8]>` and `AsRef<[u8]>`.
     ///              The boolean indicates whether the shard is present (true) or missing (false).
     pub fn reconstruct_with_mask<T: AsMut<[u8]> + AsRef<[u8]>>(
-        &self,
+        &mut self,
         shards: &mut [(T, bool)],
     ) -> Result<(), Error> {
         if shards.len() != self.total_shard_count() {
@@ -432,7 +435,9 @@ impl ReedSolomon {
                 shred_sz,
             );
             if rs.is_null() {
-                return Err(Error::InvalidConfig("failed to initialize recovery".to_string()));
+                return Err(Error::InvalidConfig(
+                    "failed to initialize recovery".to_string(),
+                ));
             }
 
             // Add data shreds
@@ -491,7 +496,7 @@ impl ReedSolomon {
     /// * `shards` - Mutable slice of mutable byte slices. All must be the same length.
     /// * `shard_present` - Slice indicating which shards are present (true) or missing (false)
     pub fn reconstruct_shards(
-        &self,
+        &mut self,
         shards: &mut [&mut [u8]],
         shard_present: &[bool],
     ) -> Result<(), Error> {
@@ -547,7 +552,9 @@ impl ReedSolomon {
                 shred_sz,
             );
             if rs.is_null() {
-                return Err(Error::InvalidConfig("failed to initialize recovery".to_string()));
+                return Err(Error::InvalidConfig(
+                    "failed to initialize recovery".to_string(),
+                ));
             }
 
             // Add data shreds
@@ -611,7 +618,7 @@ mod tests {
 
     #[test]
     fn test_new_valid() {
-        let rs = ReedSolomon::new(32, 32).unwrap();
+        let mut rs = ReedSolomon::new(32, 32).unwrap();
         assert_eq!(rs.data_shard_count(), 32);
         assert_eq!(rs.parity_shard_count(), 32);
         assert_eq!(rs.total_shard_count(), 64);
@@ -631,7 +638,7 @@ mod tests {
 
     #[test]
     fn test_encode_decode_basic() {
-        let rs = ReedSolomon::new(4, 2).unwrap();
+        let mut rs = ReedSolomon::new(4, 2).unwrap();
         let shred_size = 64;
 
         // Create shards
@@ -669,7 +676,7 @@ mod tests {
     #[test]
     fn test_encode_32x32() {
         // Test the common Solana case of 32 data + 32 parity
-        let rs = ReedSolomon::new(32, 32).unwrap();
+        let mut rs = ReedSolomon::new(32, 32).unwrap();
         let shred_size = 1228; // Typical Solana shred payload size
 
         let mut shards: Vec<Vec<u8>> = Vec::with_capacity(64);
@@ -708,7 +715,7 @@ mod tests {
 
     #[test]
     fn test_too_few_shards() {
-        let rs = ReedSolomon::new(4, 2).unwrap();
+        let mut rs = ReedSolomon::new(4, 2).unwrap();
         let shred_size = 64;
 
         let mut shards: Vec<Vec<u8>> = (0..6).map(|_| vec![0u8; shred_size]).collect();

@@ -17,11 +17,10 @@ fn main() {
     let use_native = rustflags.contains("target-cpu=native");
 
     // Determine available features
-    let has_avx2 = target_features.contains("avx2")
-        || use_native
-        || std::is_x86_feature_detected!("avx2");
-    let has_gfni = target_features.contains("gfni")
-        || (use_native && std::is_x86_feature_detected!("gfni"));
+    let has_avx2 =
+        target_features.contains("avx2") || use_native || std::is_x86_feature_detected!("avx2");
+    let has_gfni =
+        target_features.contains("gfni") || (use_native && std::is_x86_feature_detected!("gfni"));
     let has_avx512f = target_features.contains("avx512f")
         || (use_native && std::is_x86_feature_detected!("avx512f"));
 
@@ -64,6 +63,14 @@ fn main() {
         .file(reedsol_dir.join("fd_reedsol_recover_128.c"))
         .file(reedsol_dir.join("fd_reedsol_recover_256.c"))
         // Include wrapped implementations for larger FFT/PPT functions
+        .file(wrapped_impl_dir.join("fd_reedsol_fderiv_impl_128.c"))
+        .file(wrapped_impl_dir.join("fd_reedsol_fderiv_impl_256.c"))
+        .file(wrapped_impl_dir.join("fd_reedsol_ifft_impl_128_0.c"))
+        .file(wrapped_impl_dir.join("fd_reedsol_ifft_impl_128_128.c"))
+        .file(wrapped_impl_dir.join("fd_reedsol_ifft_impl_256_0.c"))
+        .file(wrapped_impl_dir.join("fd_reedsol_ifft_impl_64_0.c"))
+        .file(wrapped_impl_dir.join("fd_reedsol_ifft_impl_64_128.c"))
+        .file(wrapped_impl_dir.join("fd_reedsol_ifft_impl_64_64.c"))
         .file(wrapped_impl_dir.join("fd_reedsol_ppt_impl_17.c"))
         .file(wrapped_impl_dir.join("fd_reedsol_ppt_impl_25.c"))
         .file(wrapped_impl_dir.join("fd_reedsol_ppt_impl_33.c"))
